@@ -1,0 +1,320 @@
+---
+title: "B9653 Final Research Project"
+author: "Yue Song"
+output:
+  html_document:
+    theme: readable
+    toc: yes
+  word_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Import libraries required
+
+```{r, echo=FALSE}
+#import libraries required
+library(dplyr)
+library(ggplot2)
+library(recommenderlab)
+```
+
+## Import the dataset and screening
+
+```{r}
+#import the data set and check the top 10 rows
+raw <- read.csv("Reviews.csv", header = TRUE)
+head(raw, 10)
+```
+
+```{r}
+#check the summary of the raw data set
+str(raw)
+```
+
+```{r}
+#create a new dataframe with only UserId, ProductId, and Score that we will use
+df <- raw[, c("UserId", "ProductId", "Score")]
+#check the dimension of the dataframe
+dim(df)
+```
+
+```{r}
+#find out how many ratings a single user can have for one product
+df %>% 
+  group_by(UserId, ProductId) %>%
+  summarise(numberOfRatings = n()) %>% 
+  arrange(desc(numberOfRatings)) %>%
+  head(20)
+```
+
+```{r}
+#create a new data frame using the rounded mean score for each user-product pair as the rating
+df_1 <- df %>%
+          group_by(UserId, ProductId) %>%
+          summarise(Score = round(mean(Score)))
+```
+
+```{r}
+head(df_1, 10)
+#check out the reduction in the number of user-product pair
+dim(df_1)
+```
+
+```{r}
+#check out the number of unique users
+df_1$UserId %>% unique() %>% length
+print("There are 256059 unique users")
+#check out the number of unique products
+df_1$ProductId %>% unique() %>% length
+print("There are 74258 unique products.")
+```
+
+## Exploratory Data Analysis
+
+```{r}
+#create a bar plot to see the percentage distribution of ratings
+ggplot(data = df_1, aes(x = Score, y = (..count..)/sum(..count..)*100, fill = factor(Score))) +
+  geom_bar(width = 0.5) +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Blues") + 
+  ggtitle("Distribution of Ratings") +
+  labs(y = "Percentage of Score", x = "Ratings")
+```
+
+```{r}
+#create a histogram to show the distribution of ratings given by users and the average
+df_1 %>%
+  group_by(UserId) %>% 
+  summarise(meanScore = mean(Score)) %>% 
+  ggplot() +
+    geom_histogram(aes(x = meanScore), binwidth = .5, alpha = .8, position = "identity") +
+    geom_vline(aes(xintercept = mean(meanScore)), color = "blue") +
+    geom_text(aes(x = mean(meanScore), label = round(mean(meanScore), 2), y = 100000)) +
+    theme_minimal() +
+    ggtitle("Ratings Distribution & Average Given by Users") +  
+    labs(y = "Total Ratings", x = "Ratings")
+```
+
+```{r}
+#create a histogram to show the distribution of ratings of products and the average
+df_1 %>%
+  group_by(ProductId) %>% 
+  summarise(meanScore = mean(Score)) %>% 
+  ggplot() +
+    geom_histogram(aes(x = meanScore), binwidth = .5, alpha = .8, position = "identity") +
+    geom_vline(aes(xintercept = mean(meanScore)), color = "blue") +
+    geom_text(aes(x = mean(meanScore), label = round(mean(meanScore), 2), y = 20000)) +
+    theme_minimal() +
+    ggtitle("Ratings Distribution & Average Among Products") +  
+    labs(y = "Total Ratings", x = "Ratings")
+```
+
+```{r}
+#create a histogram to show the distribution of the number of ratings given by users and the average
+df_1 %>%
+  group_by(UserId) %>% 
+  summarise(scoreCount = n()) %>%
+  filter(scoreCount < 30) %>%
+  ggplot() +
+    geom_histogram(aes(x = scoreCount), binwidth = 1, alpha = .8, position = "identity") +
+    geom_vline(aes(xintercept = mean(scoreCount)), color = "blue") +
+    geom_text(aes(x = mean(scoreCount), label = round(mean(scoreCount), 2), y = 100000)) +
+    theme_minimal() +
+    ggtitle("Number of Ratings Given by Users & Average") +  
+    labs(y = "Total Ratings", x = "Ratings")
+```
+
+```{r}
+#create a histogram to show the distribution of the number of ratings for products and the average
+df_1 %>%
+  group_by(ProductId) %>% 
+  summarise(scoreCount = n()) %>%
+  filter(scoreCount < 50) %>%
+  ggplot() +
+    geom_histogram(aes(x = scoreCount), binwidth = 1, alpha = .8, position = "identity") +
+    geom_vline(aes(xintercept = mean(scoreCount)), color = "blue") +
+    geom_text(aes(x = mean(scoreCount), label = round(mean(scoreCount), 2), y = 20000)) +
+    theme_minimal() +
+    ggtitle("Number of Ratings for Products & Average") +  
+    labs(y = "Total Ratings", x = "Ratings")
+```
+
+```{r}
+#transform the processed data set into a rating matrix
+rating_matrix <- as(as.data.frame(df_1), "realRatingMatrix") 
+#choose a portion of ratings to limit the size of our evaluation scheme for faster execution
+rating_matrix <- rating_matrix[rowCounts(rating_matrix) > 30, colCounts(rating_matrix) > 50]
+rating_matrix <- rating_matrix[rowCounts(rating_matrix) > 10,]
+#create the evaluation scheme using cross validation method
+eval_sets <- evaluationScheme(rating_matrix, method = "cross-validation", k = 5, given = 10)
+```
+
+```{r}
+set.seed(1)
+model_to_evaluate <- "SVD"
+model_parameters <- NULL
+eval_recommender <- Recommender(data = getData(eval_sets, "train"),
+                                method = model_to_evaluate,
+                                parameter = model_parameters)
+items_to_recommend <- 10
+eval_prediction <- predict(object = eval_recommender,
+                           newdata = getData(eval_sets, "known"),
+                           n = items_to_recommend,
+                           type = "ratings")
+```
+
+```{r}
+#calculate the prediction accuracy by users
+eval_accuracy <- calcPredictionAccuracy(
+  x = eval_prediction,
+  data = getData(eval_sets, "unknown"),
+  byUser = TRUE)
+head(eval_accuracy)
+#calculate the average prediction accuracy (not by users)
+eval_accuracy <- calcPredictionAccuracy(
+  x = eval_prediction,
+  data = getData(eval_sets, "unknown"),
+  byUser = FALSE)
+eval_accuracy
+```
+
+```{r}
+#import libraries required
+library(dplyr)
+library(ggplot2)
+library(recommenderlab)
+
+#import the data set and check the top 10 rows
+raw <- read.csv("Reviews.csv", header = TRUE)
+head(raw, 10)
+
+#check the summary of the raw data set
+str(raw)
+
+#create a new dataframe with only UserId, ProductId, and Score that we will use
+df <- raw[, c("UserId", "ProductId", "Score")]
+#check the dimension of the dataframe
+dim(df)
+
+#find out how many ratings a single user can have for one product
+df %>% 
+  group_by(UserId, ProductId) %>%
+  summarise(numberOfRatings = n()) %>% 
+  arrange(desc(numberOfRatings)) %>%
+  head(20)
+
+#create a new data frame using the rounded mean score for each user-product pair as the rating
+df_1 <- df %>%
+          group_by(UserId, ProductId) %>%
+          summarise(Score = round(mean(Score)))
+
+head(df_1, 10)
+#check out the reduction in the number of user-product pair
+dim(df_1)
+
+#check out the number of unique users
+df_1$UserId %>% unique() %>% length
+print("There are 256059 unique users")
+#check out the number of unique products
+df_1$ProductId %>% unique() %>% length
+print("There are 74258 unique products.")
+
+#create a bar plot to see the percentage distribution of ratings
+ggplot(data = df_1, aes(x = Score, y = (..count..)/sum(..count..)*100, fill = factor(Score))) +
+  geom_bar(width = 0.5) +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Blues") + 
+  ggtitle("Distribution of Ratings") +
+  labs(y = "Percentage of Score", x = "Ratings")
+
+#create a histogram to show the distribution of ratings given by users and the average
+df_1 %>%
+  group_by(UserId) %>% 
+  summarise(meanScore = mean(Score)) %>% 
+  ggplot() +
+    geom_histogram(aes(x = meanScore), binwidth = .5, alpha = .8, position = "identity") +
+    geom_vline(aes(xintercept = mean(meanScore)), color = "blue") +
+    geom_text(aes(x = mean(meanScore), label = round(mean(meanScore), 2), y = 100000)) +
+    theme_minimal() +
+    ggtitle("Ratings Distribution & Average Given by Users") +  
+    labs(y = "Total Ratings", x = "Ratings")
+
+#create a histogram to show the distribution of ratings of products and the average
+df_1 %>%
+  group_by(ProductId) %>% 
+  summarise(meanScore = mean(Score)) %>% 
+  ggplot() +
+    geom_histogram(aes(x = meanScore), binwidth = .5, alpha = .8, position = "identity") +
+    geom_vline(aes(xintercept = mean(meanScore)), color = "blue") +
+    geom_text(aes(x = mean(meanScore), label = round(mean(meanScore), 2), y = 20000)) +
+    theme_minimal() +
+    ggtitle("Ratings Distribution & Average Among Products") +  
+    labs(y = "Total Ratings", x = "Ratings")
+
+#create a histogram to show the distribution of the number of ratings given by users and the average
+df_1 %>%
+  group_by(UserId) %>% 
+  summarise(scoreCount = n()) %>%
+  filter(scoreCount < 30) %>%
+  ggplot() +
+    geom_histogram(aes(x = scoreCount), binwidth = 1, alpha = .8, position = "identity") +
+    geom_vline(aes(xintercept = mean(scoreCount)), color = "blue") +
+    geom_text(aes(x = mean(scoreCount), label = round(mean(scoreCount), 2), y = 100000)) +
+    theme_minimal() +
+    ggtitle("Number of Ratings Given by Users & Average") +  
+    labs(y = "Total Ratings", x = "Ratings")
+
+#create a histogram to show the distribution of the number of ratings for products and the average
+df_1 %>%
+  group_by(ProductId) %>% 
+  summarise(scoreCount = n()) %>%
+  filter(scoreCount < 50) %>%
+  ggplot() +
+    geom_histogram(aes(x = scoreCount), binwidth = 1, alpha = .8, position = "identity") +
+    geom_vline(aes(xintercept = mean(scoreCount)), color = "blue") +
+    geom_text(aes(x = mean(scoreCount), label = round(mean(scoreCount), 2), y = 20000)) +
+    theme_minimal() +
+    ggtitle("Number of Ratings for Products & Average") +  
+    labs(y = "Total Ratings", x = "Ratings")
+
+#transform the processed data set into a rating matrix
+rating_matrix <- as(as.data.frame(df_1), "realRatingMatrix") 
+#choose a portion of ratings to limit the size of our evaluation scheme for faster execution
+rating_matrix <- rating_matrix[rowCounts(rating_matrix) > 30, colCounts(rating_matrix) > 50]
+rating_matrix <- rating_matrix[rowCounts(rating_matrix) > 10,]
+#create the evaluation scheme using cross validation method
+eval_sets <- evaluationScheme(rating_matrix, method = "cross-validation", k = 5, given = 10)
+
+set.seed(1)
+model_to_evaluate <- "SVD"
+model_parameters <- NULL
+eval_recommender <- Recommender(data = getData(eval_sets, "train"),
+                                method = model_to_evaluate,
+                                parameter = model_parameters)
+items_to_recommend <- 10
+eval_prediction <- predict(object = eval_recommender,
+                           newdata = getData(eval_sets, "known"),
+                           n = items_to_recommend,
+                           type = "ratings")
+
+#calculate the prediction accuracy by users
+eval_accuracy <- calcPredictionAccuracy(
+  x = eval_prediction,
+  data = getData(eval_sets, "unknown"),
+  byUser = TRUE)
+head(eval_accuracy)
+#calculate the average prediction accuracy (not by users)
+eval_accuracy <- calcPredictionAccuracy(
+  x = eval_prediction,
+  data = getData(eval_sets, "unknown"),
+  byUser = FALSE)
+eval_accuracy
+```
+
+
